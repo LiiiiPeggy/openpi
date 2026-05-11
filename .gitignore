@@ -3,6 +3,9 @@ assets/
 checkpoints/
 data/
 wandb/
+inference_output/
+visualization_output/
+visualization_output_sequence/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

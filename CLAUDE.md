@@ -156,6 +156,19 @@ export https_proxy=http://127.0.0.1:<port>
 export http_proxy=http://127.0.0.1:<port>
 ```
 
+## Git: What NOT to Commit
+
+These directories are large and should be in `.gitignore`:
+```
+checkpoints/
+droid_examples/
+wandb/
+outputs/
+.cache/
+*.tfrecord
+```
+Checkpoints can be regenerated from base weights via training. Use `git rm -r --cached <dir>` to untrack already-committed files.
+
 ## Troubleshooting
 - `uv sync` fails: `rm -rf .venv && uv sync`
 - GPU OOM: set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9`, use FSDP, reduce batch_size, use LoRA configs
@@ -164,3 +177,5 @@ export http_proxy=http://127.0.0.1:<port>
 - CUDA conflicts: system CUDA libs can conflict with uv-managed ones; consider uninstalling system CUDA
 - Protobuf conflict (`cannot import name 'runtime_version'`): `python -m pip install "protobuf>=6.31.1,<7.0.0" "flatbuffers>=25.9.23" "ml_dtypes>=0.5.1,<1.0.0"`
 - `uv run` breaks pip packages: stop using `uv run`, use `python` directly (see above)
+- `pip` installs to wrong location: use `python -m pip` instead of bare `pip` (system pip may shadow venv pip)
+- `ensurepip` needed: uv venvs don't include pip by default; run `python -m ensurepip && python -m pip install --upgrade pip` if `python -m pip` fails

@@ -792,6 +792,34 @@ _CONFIGS = [
         ).get_freeze_filter(),
         ema_decay=None,
     ),
+    TrainConfig(
+        name="pi05_cr10_libero",
+        # LoRA fine-tuning of pi0.5 on LIBERO for CR10 arm (6-DOF + gripper).
+        # Training uses LIBERO task-space actions; IK converts to joint-space at inference.
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=8,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
     #
     # Fine-tuning Aloha configs.
     #

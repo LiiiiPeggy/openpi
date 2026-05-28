@@ -1,0 +1,137 @@
+<!-- CR10 robotic arm MuJoCo scene for LIBERO-style tasks.
+     Based on CR10 URDF kinematic parameters from dobot_description.
+     Fixed base (no Ranger mobile platform). -->
+<mujoco model="cr10_scene">
+  <compiler angle="radian" meshdir="../../rangerboxcr10lidar_description/meshes" />
+  <option timestep="0.002" gravity="0 0 -9.81" />
+
+  <default>
+    <joint armature="0.01" damping="0.5" />
+    <geom condim="4" friction="1.0 0.005 0.001" />
+    <motor ctrlrange="-100 100" ctrllimited="true" />
+  </default>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.6 0.7 0.8" rgb2="0.2 0.2 0.3" width="512" height="512" />
+    <texture name="texplane" type="2d" builtin="checker" rgb1="0.8 0.8 0.8" rgb2="0.7 0.7 0.7" width="512" height="512" />
+    <material name="matplane" texture="texplane" texrepeat="4 4" reflectance="0.1" />
+    <material name="metal" rgba="0.7 0.7 0.75 1" specular="0.5" shininess="0.5" />
+    <material name="dark_metal" rgba="0.3 0.3 0.35 1" specular="0.3" shininess="0.3" />
+    <material name="gripper_mat" rgba="0.2 0.2 0.2 1" />
+    <material name="red" rgba="0.8 0.2 0.2 1" />
+    <material name="blue" rgba="0.2 0.2 0.8 1" />
+    <material name="green" rgba="0.2 0.8 0.2 1" />
+  </asset>
+
+  <worldbody>
+    <!-- Ground plane -->
+    <geom name="floor" type="plane" size="2 2 0.1" material="matplane" />
+    <light directional="true" diffuse="0.8 0.8 0.8" specular="0.3 0.3 0.3" pos="0 0 4" dir="0 0 -1" />
+    <light directional="true" diffuse="0.4 0.4 0.4" pos="2 2 3" dir="-1 -1 -1" />
+
+    <!-- Table -->
+    <body name="table" pos="0.5 0 0.4">
+      <geom name="table_top" type="box" size="0.4 0.5 0.02" pos="0 0 0" material="matplane" mass="20" />
+      <geom name="table_leg1" type="cylinder" size="0.03 0.4" pos="0.3 0.4 -0.2" material="dark_metal" />
+      <geom name="table_leg2" type="cylinder" size="0.03 0.4" pos="-0.3 0.4 -0.2" material="dark_metal" />
+      <geom name="table_leg3" type="cylinder" size="0.03 0.4" pos="0.3 -0.4 -0.2" material="dark_metal" />
+      <geom name="table_leg4" type="cylinder" size="0.03 0.4" pos="-0.3 -0.4 -0.2" material="dark_metal" />
+    </body>
+
+    <!-- CR10 Arm -->
+    <body name="base_link" pos="0 0 0.5">
+      <geom name="base" type="cylinder" size="0.06 0.08825" pos="0 0 0.08825" material="dark_metal" mass="1.83" />
+
+      <!-- Joint 1: base rotation (Z-axis) -->
+      <body name="Link1" pos="0 0 0.1765">
+        <joint name="joint1" type="hinge" axis="0 0 1" range="-3.14 3.14" />
+        <geom name="link1" type="capsule" fromto="0 0 0 0 0 0.12" size="0.05" material="metal" mass="4.16" />
+
+        <!-- Joint 2: shoulder (Z-axis, with frame rotation) -->
+        <body name="Link2" pos="0 0 0" euler="1.5708 1.5708 0">
+          <joint name="joint2" type="hinge" axis="0 0 1" range="-3.14 3.14" />
+          <geom name="link2_geom1" type="capsule" fromto="0 0 0 0 0 0.08" size="0.055" material="metal" mass="11.31" />
+          <geom name="link2_geom2" type="capsule" fromto="0 0 0.08 -0.607 0 0.08" size="0.045" material="metal" />
+
+          <!-- Joint 3: elbow (Z-axis) -->
+          <body name="Link3" pos="-0.607 0 0">
+            <joint name="joint3" type="hinge" axis="0 0 1" range="-2.861 2.861" />
+            <geom name="link3_geom1" type="capsule" fromto="0 0 0 0 0 0.06" size="0.04" material="metal" mass="4.89" />
+            <geom name="link3_geom2" type="capsule" fromto="0 0 0.06 -0.568 0 0.06" size="0.035" material="metal" />
+
+            <!-- Joint 4: wrist pitch (Z-axis, with frame rotation) -->
+            <body name="Link4" pos="-0.568 0 0.191" euler="0 0 -1.5708">
+              <joint name="joint4" type="hinge" axis="0 0 1" range="-3.14 3.14" />
+              <geom name="link4" type="capsule" fromto="0 0 0 0 -0.125 0" size="0.03" material="metal" mass="1.17" />
+
+              <!-- Joint 5: wrist roll (Z-axis, with frame rotation) -->
+              <body name="Link5" pos="0 -0.125 0" euler="1.5708 0 0">
+                <joint name="joint5" type="hinge" axis="0 0 1" range="-3.14 3.14" />
+                <geom name="link5" type="capsule" fromto="0 0 0 0 0 0.05" size="0.025" material="metal" mass="1.22" />
+
+                <!-- Joint 6: wrist rotate (Z-axis, with frame rotation) -->
+                <body name="Link6" pos="0 0.1084 0" euler="-1.5708 0 0">
+                  <joint name="joint6" type="hinge" axis="0 0 1" range="-6.28 6.28" />
+                  <geom name="link6" type="capsule" fromto="0 0 0 0 0 0.03" size="0.02" material="metal" mass="0.21" />
+
+                  <!-- Gripper (simplified parallel jaw) -->
+                  <body name="gripper_base" pos="0 0 0.03">
+                    <geom name="gripper_base_geom" type="box" size="0.025 0.04 0.015" material="gripper_mat" mass="0.3" />
+
+                    <!-- Wrist camera (D455) -->
+                    <camera name="wrist_cam" pos="0 -0.06 0.03" xyaxes="0 -1 0 0 0 1" fovy="60" />
+
+                    <!-- Left finger -->
+                    <body name="left_finger" pos="0 -0.015 0.015">
+                      <joint name="gripper_joint" type="hinge" axis="0 1 0" range="0 0.04" />
+                      <geom name="left_finger_geom" type="box" size="0.005 0.01 0.03" material="gripper_mat" mass="0.05" />
+                    </body>
+
+                    <!-- Right finger (mimic) -->
+                    <body name="right_finger" pos="0 0.015 0.015">
+                      <joint name="gripper_joint_mimic" type="hinge" axis="0 1 0" range="0 0.04" />
+                      <geom name="right_finger_geom" type="box" size="0.005 0.01 0.03" material="gripper_mat" mass="0.05" />
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <!-- Third-person camera -->
+    <camera name="third_person" pos="1.0 -0.8 1.2" xyaxes="0.7 -0.7 0 0.3 0.3 1" fovy="50" />
+
+    <!-- Manipulable objects on table -->
+    <body name="red_block" pos="0.45 0.1 0.45">
+      <joint name="red_block_joint" type="free" />
+      <geom name="red_block" type="box" size="0.025 0.025 0.025" material="red" mass="0.1" />
+    </body>
+
+    <body name="blue_block" pos="0.55 -0.1 0.45">
+      <joint name="blue_block_joint" type="free" />
+      <geom name="blue_block" type="box" size="0.025 0.025 0.025" material="blue" mass="0.1" />
+    </body>
+
+    <body name="green_cylinder" pos="0.5 0.0 0.47">
+      <joint name="green_cylinder_joint" type="free" />
+      <geom name="green_cylinder" type="cylinder" size="0.02 0.03" material="green" mass="0.08" />
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="act_joint1" joint="joint1" gear="50" />
+    <motor name="act_joint2" joint="joint2" gear="80" />
+    <motor name="act_joint3" joint="joint3" gear="60" />
+    <motor name="act_joint4" joint="joint4" gear="30" />
+    <motor name="act_joint5" joint="joint5" gear="30" />
+    <motor name="act_joint6" joint="joint6" gear="15" />
+    <motor name="act_gripper" joint="gripper_joint" gear="10" />
+  </actuator>
+
+  <equality>
+    <joint joint1="gripper_joint" joint2="gripper_joint_mimic" polycoef="0 -1 0 0 0" />
+  </equality>
+</mujoco>

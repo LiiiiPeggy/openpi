@@ -72,6 +72,21 @@ uv run scripts/serve_policy.py policy:checkpoint --policy.config=<config> --poli
 uv run scripts/serve_policy.py --env=[DROID|ALOHA|LIBERO]
 ```
 
+### CR10 Simulation (MuJoCo)
+```bash
+# Install extra dependencies
+python -m pip install pykdl2 urdf-parser-py mujoco imageio
+
+# Real-time visualization
+python examples/cr10_sim/main.py --checkpoint <ckpt_path> --viewer --prompt "pick up the red block"
+
+# Record video
+python examples/cr10_sim/main.py --checkpoint <ckpt_path> --video output.mp4
+
+# Training config: pi05_cr10_libero (batch_size=8, 30k steps, LoRA)
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 python scripts/train.py pi05_cr10_libero --exp-name=cr10_v1
+```
+
 ### JAX to PyTorch Conversion
 ```bash
 uv run examples/convert_jax_model_to_pytorch.py --checkpoint_dir <jax_ckpt> --config_name <config> --output_path <output>
@@ -82,7 +97,7 @@ uv run examples/convert_jax_model_to_pytorch.py --checkpoint_dir <jax_ckpt> --co
 ### Package Structure (`src/openpi/`)
 - **models/** — JAX/Flax model definitions: pi0.py (flow matching), pi0_fast.py (autoregressive), gemma.py (LLM backbone), siglip.py (vision encoder), tokenizer.py, lora.py
 - **models_pytorch/** — PyTorch equivalents: pi0_pytorch.py, gemma_pytorch.py, plus patched HuggingFace transformers in `transformers_replace/`
-- **policies/** — Robot-specific input/output transforms: aloha_policy.py (14-dim dual arm), droid_policy.py (8-dim Franka), libero_policy.py (7-dim Panda). policy.py wraps model + transforms into `Policy.infer()`. policy_config.py has `create_trained_policy()` factory.
+- **policies/** — Robot-specific input/output transforms: aloha_policy.py (14-dim dual arm), droid_policy.py (8-dim Franka), libero_policy.py (7-dim Panda), cr10_policy.py (CR10 arm with IK). cr10_ik.py provides IK solver (pykdl2/moveit_kdl backends). policy.py wraps model + transforms into `Policy.infer()`. policy_config.py has `create_trained_policy()` factory.
 - **training/** — config.py (all TrainConfig/DataConfig definitions, ~25 named configs), data_loader.py (TorchDataLoader, RLDSDataLoader), checkpoints.py (Orbax), optimizer.py (AdamW, cosine schedule), weight_loaders.py, sharding.py (FSDP)
 - **transforms.py** — Data pipeline: Normalize/Unnormalize, ResizeImages, DeltaActions, TokenizePrompt, RepackTransform, PadStatesAndActions
 - **serving/** — websocket_policy_server.py (async WebSocket server)
@@ -92,6 +107,8 @@ uv run examples/convert_jax_model_to_pytorch.py --checkpoint_dir <jax_ckpt> --co
 Training data → LeRobot dataset format → `DataConfig` repack/transforms → Normalize (z-score for pi0, quantile for pi0.5/pi0-FAST) → Model transforms (resize to 224x224, tokenize prompt, pad) → Model
 
 Inference: observation dict → Policy.infer() → input transforms → model.sample_actions() → output transforms → action chunk [action_horizon, action_dim]
+
+CR10 inference adds an IK layer: model outputs 7D task-space actions → CR10IKSolver converts to 7D joint-space (j1-j6 + gripper) → MuJoCo executes. IK backends: pykdl2 (default, no ROS) or moveit_kdl (requires ROS/MoveIt).
 
 ### Key Config Pattern
 All configs are defined programmatically in `src/openpi/training/config.py`. Named configs are registered in `_CONFIGS` list and accessed via `get_config("name")`. Data configs inherit from `DataConfigFactory` with robot-specific `repack_transforms`, `data_transforms`, `model_transforms`.

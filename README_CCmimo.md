@@ -756,3 +756,149 @@ URDF 的作用：
 | LIBERO 数据转换 | `examples/libero/convert_libero_data_to_lerobot.py` |
 | 自定义数据推理 | `src/test/4InputSelfDataInferExample.py` |
 | WebSocket 客户端 | `packages/openpi-client/src/openpi_client/websocket_client_policy.py` |
+
+---
+
+## 八、CR10 机械臂配置详解
+
+### 8.1 设计思路
+
+CR10（6-DOF + 夹爪）没有自己的训练数据。核心策略：**用 LIBERO 数据集（Panda 臂）训练 pi0.5，推理时通过 IK 将任务空间动作转换为 CR10 关节空间动作**。
+
+```
+训练：LIBERO 数据集（Panda 臂图像 + 7D 任务空间动作）
+  → pi0.5 模型学习"看场景 → 输出末端执行器增量"
+
+推理：CR10 MuJoCo 仿真（CR10 臂图像）
+  → 模型输出 7D 任务空间动作 → CR10IKSolver → 7D 关节空间动作
+```
+
+### 8.2 修改的关键参数
+
+#### 训练配置（`src/openpi/training/config.py` 第 795-822 行）
+
+基于 `pi05_libero_low_mem_finetune` 配置，修改了以下参数：
+
+| 参数 | 原始值（libero） | CR10 修改值 | 原因 |
+|------|------------------|-------------|------|
+| `name` | `pi05_libero_low_mem_finetune` | `pi05_cr10_libero` | 独立配置名 |
+| `batch_size` | 16 | **8** | A6000 48GB 显存适配 |
+| `num_train_steps` | 20,000 | **30,000** | 更充分训练 |
+| `action_horizon` | 50 | **10** | CR10 任务较短，减少预测步数 |
+| `ema_decay` | 有 | **None** | LoRA 微调禁用 EMA |
+| `paligemma_variant` | `gemma_2b` | **`gemma_2b_lora`** | 启用 LoRA 降低显存 |
+| `action_expert_variant` | `gemma_300m` | **`gemma_300m_lora`** | 启用 LoRA 降低显存 |
+| `freeze_filter` | 无 | **LoRA freeze filter** | 冻结非 LoRA 参数 |
+| `data` | LeRobotLiberoDataConfig | 同（`extra_delta_transform=False`） | 复用 LIBERO 数据 |
+| `weight_loader` | pi05_base checkpoint | 同 | 从预训练权重初始化 |
+
+完整配置：
+```python
+TrainConfig(
+    name="pi05_cr10_libero",
+    model=pi0_config.Pi0Config(
+        pi05=True, action_horizon=10, discrete_state_input=False,
+        paligemma_variant="gemma_2b_lora",
+        action_expert_variant="gemma_300m_lora",
+    ),
+    data=LeRobotLiberoDataConfig(
+        repo_id="physical-intelligence/libero",
+        base_config=DataConfig(prompt_from_task=True),
+        extra_delta_transform=False,
+    ),
+    batch_size=8,
+    weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    num_train_steps=30_000,
+    freeze_filter=pi0_config.Pi0Config(
+        pi05=True, action_horizon=10, discrete_state_input=False,
+        paligemma_variant="gemma_2b_lora",
+        action_expert_variant="gemma_300m_lora",
+    ).get_freeze_filter(),
+    ema_decay=None,
+)
+```
+
+#### IK 求解器（`src/openpi/policies/cr10_ik.py`）
+
+关键参数修正（基于 `rangerboxcr10lidar_description/urdf/rangercr10lidar.urdf`）：
+
+| 参数 | 修正内容 |
+|------|----------|
+| 关节名 | `joint1` → `cr10_joint1`（与 URDF 一致） |
+| 关节限位 | 从 URDF 提取，j1[-3.92, 0.94]、j2[-1.57, 1.57]、j3[-2.86, 2.86]、j4-j6[-3.14, 3.14] |
+| FK 旋转 | `GetRP()` → `GetRPY()`（返回完整 6D 位姿） |
+| Jacobian fallback | 添加 1mm 收敛阈值检查 |
+| IK 后端 | `pykdl2`（默认，无需 ROS）、`moveit_kdl`（需 ROS 环境） |
+
+关节限位对比：
+
+| 关节 | 原始（错误） | 修正后（URDF） |
+|------|-------------|----------------|
+| j1 | [-3.14, 3.14] | **[-3.92, 0.94]** |
+| j2 | [-3.14, 3.14] | **[-1.57, 1.57]** |
+| j3 | [-2.861, 2.861] | [-2.86, 2.86]（微调） |
+| j4 | [-3.14, 3.14] | 不变 |
+| j5 | [-3.14, 3.14] | 不变 |
+| j6 | [-6.28, 6.28] | **[-3.14, 3.14]** |
+
+#### MuJoCo 仿真环境（`examples/cr10_sim/`）
+
+| 文件 | 关键修改 |
+|------|----------|
+| `cr10_scene.xml` | 夹爪 mimic joint 修正：两指同轴 `axis="0 1 0"` + polycoef `"0 -1 0 0 0"`（对称开合） |
+| `env.py` | `step()` 调用 10 次 `mj_step`（而非 1 次），确保位置控制收敛 |
+| `env.py` | 关节角 clip [-π, π]，夹爪 clip [0, 1]（分开处理） |
+| `main.py` | `--replan-steps=5`：执行 5 步后重新推理（action chunking） |
+
+#### 策略变换（`src/openpi/policies/cr10_policy.py`）
+
+| 类 | 作用 |
+|----|------|
+| `CR10Inputs` | 与 `LiberoInputs` 相同（训练数据来自 LIBERO，观测格式一致） |
+| `CR10Outputs` | 可选的 IK 包装器（当前 `main.py` 手动调用 IK，未使用此类） |
+
+### 8.3 完整命令流程
+
+```bash
+# 1. 安装额外依赖
+python -m pip install pykdl2 urdf-parser-py mujoco imageio
+
+# 2. 计算归一化统计（训练前必须）
+python scripts/compute_norm_stats.py --config-name pi05_cr10_libero
+
+# 3. 训练
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 python scripts/train.py pi05_cr10_libero --exp-name=cr10_libero_v1
+
+# 4. 断点续训
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 python scripts/train.py pi05_cr10_libero --exp-name=cr10_libero_v1 --resume
+
+# 5. 推理可视化
+python examples/cr10_sim/main.py --checkpoint checkpoints/pi05_cr10_libero/cr10_libero_v1/29999 --viewer --prompt "pick up the red block"
+
+# 6. 录制推理视频
+python examples/cr10_sim/main.py --checkpoint checkpoints/pi05_cr10_libero/cr10_libero_v1/29999 --video output.mp4
+```
+
+### 8.4 训练结果
+
+| 指标 | 值 |
+|------|-----|
+| 总步数 | 30,000 |
+| 训练耗时 | ~11.5 小时（A6000 48GB） |
+| 初始 loss | 0.0268（step 5100） |
+| 最终 loss | 0.0191（step 29900） |
+| loss 下降 | ~29% |
+| 最终 checkpoint | `checkpoints/pi05_cr10_libero/cr10_libero_v1/29999` |
+
+### 8.5 新增文件清单
+
+| 文件 | 说明 |
+|------|------|
+| `src/openpi/policies/cr10_ik.py` | IK 求解器（301 行），双后端 pykdl2/moveit_kdl |
+| `src/openpi/policies/cr10_policy.py` | CR10 输入输出变换（125 行） |
+| `examples/cr10_sim/cr10_scene.xml` | MuJoCo 场景（CR10 臂 + 桌面 + 物体） |
+| `examples/cr10_sim/env.py` | Gymnasium 环境封装（202 行） |
+| `examples/cr10_sim/main.py` | 推理可视化入口（171 行） |
+| `examples/cr10_sim/__init__.py` | 包初始化 |
+| `rangerboxcr10lidar_description/` | CR10 URDF + STL 网格文件 |
+| `assets/pi05_cr10_libero/` | 归一化统计量 `norm_stats.json` |

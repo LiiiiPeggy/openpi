@@ -1,6 +1,53 @@
-# CR10-LIBERO 训练实验记录
+# 训练实验记录
 
-## 实验配置
+---
+
+## 实验 A：pi05_libero_low_mem_finetune（LIBERO 原始配置）
+
+### 配置
+
+| 参数 | 值 |
+|------|-----|
+| 配置名 | `pi05_libero_low_mem_finetune` |
+| 模型 | pi0.5 (LoRA) |
+| LoRA 变体 | `gemma_2b_lora` + `gemma_300m_lora` |
+| 数据集 | `physical-intelligence/libero` (LIBERO) |
+| action_horizon | 10 |
+| batch_size | 16 |
+| num_train_steps | 30,000 |
+| 权重初始化 | `gs://openpi-assets/checkpoints/pi05_base/params` |
+| EMA | 禁用 (None) |
+| GPU | RTX A6000 48GB |
+
+### 训练结果
+
+| 项目 | 值 |
+|------|-----|
+| 开始时间 | 2026-05-12 17:25 |
+| 结束时间 | 2026-05-13 21:03 |
+| 运行时长 | ~27.5 小时 |
+| 完成步数 | 30,000 / 30,000 (100%) |
+| 保存的 checkpoint | step 5000, 10000, 15000, 20000, 25000, 29999 |
+| Checkpoint 路径 | `checkpoints/pi05_libero_low_mem_finetune/my_experiment/` |
+| WandB run | `k4gjzc8f` |
+
+**Loss 变化（日志仅记录前 900 步）：**
+
+| Step | Loss | grad_norm | param_norm |
+|------|------|-----------|------------|
+| 0 | 0.0917 | 0.4471 | 1803.77 |
+| 100 | 0.0777 | 0.4974 | 1803.77 |
+| 200 | 0.0639 | 0.3594 | 1803.77 |
+| 500 | 0.0423 | 0.2601 | 1803.77 |
+| 900 | 0.0347 | 0.2023 | 1803.79 |
+
+> 注：WandB 日志在 step 900 后中断，但训练继续运行至 30000 步完成。最终 checkpoint 保存在 step 29999。
+
+---
+
+## 实验 B：pi05_cr10_libero（CR10 机械臂配置）
+
+### 配置
 
 | 参数 | 值 |
 |------|-----|
@@ -16,9 +63,7 @@
 | GPU | RTX A6000 48GB |
 | 环境变量 | `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` |
 
----
-
-## Run #1：首次训练（失败）
+### Run B-1：首次训练（失败）
 
 | 项目 | 值 |
 |------|-----|
@@ -43,7 +88,7 @@
 
 ---
 
-## Run #2：断点续训（成功）
+### Run B-2：断点续训（成功）
 
 | 项目 | 值 |
 |------|-----|
@@ -75,7 +120,7 @@
 
 ---
 
-## Loss 趋势总结
+### Loss 趋势总结（实验 B）
 
 ```
 Step     Loss     变化
@@ -94,7 +139,7 @@ Step     Loss     变化
 
 ---
 
-## 代码修复记录（训练前）
+### 代码修复记录（实验 B 训练前）
 
 训练前发现并修复了 4 个 Critical 问题：
 

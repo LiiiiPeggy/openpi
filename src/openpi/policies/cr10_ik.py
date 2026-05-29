@@ -1,7 +1,8 @@
 """CR10 robotic arm Inverse Kinematics solver.
 
-Supports two backends:
-- pykdl2 (default): Pure Python KDL bindings, no ROS dependency
+Supports three backends:
+- numpy (default): Pure numpy numerical IK, no external dependencies
+- pykdl2: Python KDL bindings (requires pykdl2 + urdf_parser_py)
 - moveit_kdl: Uses MoveIt's KDL plugin via ROS (requires ROS environment)
 
 CR10 kinematic chain (from URDF):
@@ -25,6 +26,53 @@ JOINT_LIMITS_LOWER = np.array([-3.92, -1.57, -2.86, -3.14, -3.14, -3.14])
 JOINT_LIMITS_UPPER = np.array([0.94, 1.57, 2.86, 3.14, 3.14, 3.14])
 
 
+def _rpy_to_rotation_matrix(rpy: np.ndarray) -> np.ndarray:
+    """Convert RPY (roll, pitch, yaw) to 3x3 rotation matrix (ZYX convention)."""
+    cr, sr = np.cos(rpy[0]), np.sin(rpy[0])
+    cp, sp = np.cos(rpy[1]), np.sin(rpy[1])
+    cy, sy = np.cos(rpy[2]), np.sin(rpy[2])
+    R = np.array([
+        [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+        [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+        [-sp,   cp*sr,             cp*cr],
+    ])
+    return R
+
+
+def _rotation_matrix_to_rpy(R: np.ndarray) -> np.ndarray:
+    """Convert 3x3 rotation matrix to RPY (roll, pitch, yaw, ZYX convention)."""
+    sy = np.sqrt(R[0, 0]**2 + R[1, 0]**2)
+    singular = sy < 1e-6
+    if not singular:
+        rx = np.arctan2(R[2, 1], R[2, 2])
+        ry = np.arctan2(-R[2, 0], sy)
+        rz = np.arctan2(R[1, 0], R[0, 0])
+    else:
+        rx = np.arctan2(-R[1, 2], R[1, 1])
+        ry = np.arctan2(-R[2, 0], sy)
+        rz = 0.0
+    return np.array([rx, ry, rz])
+
+
+def _make_transform(xyz: np.ndarray, rpy: np.ndarray) -> np.ndarray:
+    """Create 4x4 homogeneous transform from XYZ translation and RPY rotation."""
+    T = np.eye(4)
+    T[:3, :3] = _rpy_to_rotation_matrix(rpy)
+    T[:3, 3] = xyz
+    return T
+
+
+def _rot_z(theta: float) -> np.ndarray:
+    """Create 4x4 rotation matrix around Z-axis."""
+    c, s = np.cos(theta), np.sin(theta)
+    T = np.eye(4)
+    T[0, 0] = c
+    T[0, 1] = -s
+    T[1, 0] = s
+    T[1, 1] = c
+    return T
+
+
 class CR10IKSolver:
     """IK solver for the CR10 6-DOF robotic arm.
 
@@ -37,22 +85,41 @@ class CR10IKSolver:
     def __init__(
         self,
         urdf_path: str | Path,
-        backend: str = "pykdl2",
+        backend: str = "numpy",
         base_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
     ):
         self.urdf_path = Path(urdf_path)
         self.backend = backend
         self.base_offset = np.array(base_offset)
-        self._chain = None
-        self._fk_solver = None
-        self._ik_solver = None
 
-        if backend == "pykdl2":
+        if backend == "numpy":
+            self._init_numpy()
+        elif backend == "pykdl2":
             self._init_pykdl()
         elif backend == "moveit_kdl":
             self._init_moveit_kdl()
         else:
-            raise ValueError(f"Unknown IK backend: {backend}. Use 'pykdl2' or 'moveit_kdl'.")
+            raise ValueError(f"Unknown IK backend: {backend}. Use 'numpy', 'pykdl2', or 'moveit_kdl'.")
+
+    def _init_numpy(self) -> None:
+        """Initialize numpy-based numerical IK solver (no external dependencies)."""
+        # CR10 joint transforms from URDF: each joint has a fixed frame + rotation around Z
+        # (xyz, rpy) pairs defining the fixed frame before each joint
+        self._joint_frames = [
+            (np.array([0, 0, 0.1765]), np.array([0, 0, 0])),           # joint1
+            (np.array([0, 0, 0]), np.array([np.pi/2, np.pi/2, 0])),    # joint2
+            (np.array([-0.607, 0, 0]), np.array([0, 0, 0])),           # joint3
+            (np.array([-0.568, 0, 0.191]), np.array([0, 0, -np.pi/2])),# joint4
+            (np.array([0, -0.125, 0]), np.array([np.pi/2, 0, 0])),     # joint5
+            (np.array([0, 0.1084, 0]), np.array([-np.pi/2, 0, 0])),    # joint6
+        ]
+        # End-effector offset from last joint
+        self._ee_offset = np.array([0, 0.1084, 0])
+        # Pre-compute fixed frame transforms (without joint rotation)
+        self._fixed_transforms = []
+        for xyz, rpy in self._joint_frames:
+            self._fixed_transforms.append(_make_transform(xyz, rpy))
+        logger.info("Initialized numpy IK solver for CR10")
 
     def _init_pykdl(self) -> None:
         """Initialize KDL chain from URDF using pykdl2."""
@@ -121,7 +188,9 @@ class CR10IKSolver:
         Returns:
             Target joint angles [6], clamped to joint limits.
         """
-        if self.backend == "pykdl2":
+        if self.backend == "numpy":
+            return self._solve_numpy(current_joint_pos, delta_ee_pose)
+        elif self.backend == "pykdl2":
             return self._solve_pykdl(current_joint_pos, delta_ee_pose)
         else:
             return self._solve_moveit(current_joint_pos, delta_ee_pose)
@@ -153,10 +222,69 @@ class CR10IKSolver:
         Returns:
             End-effector pose [x, y, z, rx, ry, rz].
         """
-        if self.backend == "pykdl2":
+        if self.backend == "numpy":
+            return self._fk_numpy(joint_pos)
+        elif self.backend == "pykdl2":
             return self._fk_pykdl(joint_pos)
         else:
             return self._fk_moveit(joint_pos)
+
+    def _fk_numpy(self, joint_pos: np.ndarray) -> np.ndarray:
+        """Compute forward kinematics using numpy."""
+        T = np.eye(4)
+        T[:3, 3] = self.base_offset
+        for i in range(6):
+            T = T @ self._fixed_transforms[i] @ _rot_z(joint_pos[i])
+        # Apply end-effector offset
+        T = T @ _make_transform(self._ee_offset, np.zeros(3))
+        pos = T[:3, 3]
+        rpy = _rotation_matrix_to_rpy(T[:3, :3])
+        return np.concatenate([pos, rpy])
+
+    def _jacobian_numpy(self, joint_pos: np.ndarray) -> np.ndarray:
+        """Compute 6x6 Jacobian numerically using finite differences."""
+        jac = np.zeros((6, 6))
+        eps = 1e-6
+        f0 = self._fk_numpy(joint_pos)
+        for i in range(6):
+            q_pert = joint_pos.copy()
+            q_pert[i] += eps
+            f1 = self._fk_numpy(q_pert)
+            jac[:, i] = (f1 - f0) / eps
+        return jac
+
+    def _solve_numpy(self, current_joint_pos: np.ndarray, delta_ee_pose: np.ndarray) -> np.ndarray:
+        """Solve IK using damped least-squares (Levenberg-Marquardt) with numpy."""
+        # Compute target pose
+        current_ee = self._fk_numpy(current_joint_pos)
+        target_ee = current_ee + delta_ee_pose
+
+        q = current_joint_pos.copy()
+        damping = 0.1
+        n_steps = 20
+
+        for _ in range(n_steps):
+            ee = self._fk_numpy(q)
+            err = target_ee - ee
+
+            # Wrap rotation errors to [-pi, pi]
+            for i in range(3, 6):
+                while err[i] > np.pi:
+                    err[i] -= 2 * np.pi
+                while err[i] < -np.pi:
+                    err[i] += 2 * np.pi
+
+            if np.linalg.norm(err[:3]) < 1e-3 and np.linalg.norm(err[3:]) < 1e-3:
+                break
+
+            jac = self._jacobian_numpy(q)
+            # Damped least-squares: dq = J^T (J J^T + λ²I)^{-1} err
+            JJT = jac @ jac.T + damping**2 * np.eye(6)
+            dq = jac.T @ np.linalg.solve(JJT, err)
+            q += dq
+            q = np.clip(q, JOINT_LIMITS_LOWER, JOINT_LIMITS_UPPER)
+
+        return q
 
     def _solve_pykdl(self, current_joint_pos: np.ndarray, delta_ee_pose: np.ndarray) -> np.ndarray:
         """Solve IK using pykdl2."""

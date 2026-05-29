@@ -36,7 +36,7 @@ def main():
     parser.add_argument("--max-steps", type=int, default=300, help="Max steps per episode")
     parser.add_argument("--video", type=str, default=None, help="Path to save video (e.g., output.mp4)")
     parser.add_argument("--viewer", action="store_true", help="Show real-time MuJoCo viewer")
-    parser.add_argument("--ik-backend", type=str, default="pykdl2", choices=["pykdl2", "moveit_kdl"],
+    parser.add_argument("--ik-backend", type=str, default="numpy", choices=["numpy", "pykdl2", "moveit_kdl"],
                         help="IK solver backend")
     parser.add_argument("--urdf-path", type=str, default=None, help="Path to CR10 URDF file")
     parser.add_argument("--replan-steps", type=int, default=5, help="Steps to execute per action chunk")
